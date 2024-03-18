@@ -1,0 +1,262 @@
+﻿Program.Sub.ScreenSU.Start
+Program.Sub.ScreenSU.End
+
+Program.Sub.Preflight.Start
+V.Global.sNewOrdFile.Declare
+V.Global.sNewOrdPath.Declare
+V.Global.sInvoicedFile.Declare
+V.Global.sInvoicedPath.Declare
+V.Global.sOpenFile.Declare
+V.Global.sOpenPath.Declare
+V.Global.sOrdDate.Declare
+V.Global.sPath.Declare
+Program.Sub.Preflight.End
+
+Program.Sub.Main.Start
+F.Intrinsic.Control.Try
+'TJS, February 2021
+'Simpson Performance Products
+'BUSINESS CASE: The customer needs a custom export / email process that exports sales and invoice data on a daily basis and emails it to a specified list of people.
+
+'TJS, April 2021
+'Modified for Simpson Performance for Quote 12837
+
+F.ODBC.Connection!conts.OpenCompanyConnection
+	F.Intrinsic.Control.CallSub(Data)
+F.ODBC.Connection!conts.Close
+
+F.Intrinsic.Control.CallSub(FileCheck)
+F.Intrinsic.Control.CallSub(OutputCSV)
+F.Intrinsic.Control.CallSub(SFTPUpload)
+
+F.Intrinsic.Control.End
+
+F.Intrinsic.Control.Catch
+	F.Intrinsic.Control.CallSub(Error,"SubRoutine",V.Ambient.CurrentSubroutine,"eNumber",V.Ambient.ErrorNumber,"eDescription",V.Ambient.ErrorDescription)
+F.Intrinsic.Control.EndTry
+Program.Sub.Main.End
+
+Program.Sub.FileCheck.Start
+F.Intrinsic.Control.Try
+V.Local.bChk.Declare
+
+F.Intrinsic.String.Build("{0}\CUSTOM\6279",V.Caller.GlobalDir,V.Global.sPath)
+
+F.Intrinsic.File.DirExists(V.Global.sPath,V.Local.bChk)
+
+F.Intrinsic.Control.If(V.Local.bChk,=,False)
+	F.Intrinsic.File.CreateDir(V.Global.sPath)
+F.Intrinsic.Control.EndIf
+
+F.Intrinsic.String.Build("DailyNewOrders_{0}.csv",V.Global.sOrdDate.FormatMMDDYY,V.Global.sNewOrdFile)
+F.Intrinsic.String.Build("DailyInvoiced_{0}.csv",V.Global.sOrdDate.FormatMMDDYY,V.Global.sInvoicedFile)
+F.Intrinsic.String.Build("DailyOpen_{0}.csv",V.Global.sOrdDate.FormatMMDDYY,V.Global.sOpenFile)
+
+F.Intrinsic.String.Build("{0}\{1}",V.Global.sPath,V.Global.sNewOrdFile,V.Global.sNewOrdPath)
+F.Intrinsic.String.Build("{0}\{1}",V.Global.sPath,V.Global.sInvoicedFile,V.Global.sInvoicedPath)
+F.Intrinsic.String.Build("{0}\{1}",V.Global.sPath,V.Global.sOpenFile,V.Global.sOpenPath)
+
+F.Intrinsic.Control.Catch
+	F.Intrinsic.Control.CallSub(Error,"SubRoutine",V.Ambient.CurrentSubroutine,"eNumber",V.Ambient.ErrorNumber,"eDescription",V.Ambient.ErrorDescription)
+F.Intrinsic.Control.EndTry
+Program.Sub.FileCheck.End
+
+Program.Sub.Data.Start
+F.Intrinsic.Control.Try
+V.Local.sSQL.Declare
+V.Local.sParameters.Declare
+
+V.Global.sOrdDate.Set(V.Ambient.Date)
+
+F.Intrinsic.Date.DateAdd("d",-1,V.Global.sOrdDate,V.Global.sOrdDate)
+
+''*********************REMOVE BEFORE DELIVERY*********************************
+'V.Global.sOrdDate.Set("2013-01-23")
+''****************************************************************************
+
+'Daily New Order Summary
+F.Intrinsic.String.ConcatCallWrapperArgs(V.Global.sOrdDate.FormatMMDDYY,V.Global.sOrdDate.FormatMMDDYY,"L","","","","|~|CRYSTAL-OVERRIDE|~|",V.Local.sParameters)
+F.Global.General.CallWrapperSyncBIO(910040,V.Local.sParameters)
+
+F.Intrinsic.Control.If(V.DataTable.dtNewOrder.Exists)
+	F.Data.DataTable.Close("dtNewOrder")
+F.Intrinsic.Control.EndIf
+
+F.Intrinsic.String.Build("Select IF(REC_TYPE = 'L','      Line Item',IF(REC_TYPE = 'T','               Total','')) as 'Record Type',CUST_NUMBER as 'Customer ID',CUST_NAME as 'Customer Name',ORDER_NUMBER as 'Ord No',Left(ORDER_LINE,3) as 'Ord Line',ORDER_DATE,' ' as 'Date Ord',SALESMAN_NUMBER as 'Salesperson',PART_NUMBER as Item,PROD_LINE as PL,ACTION_TAKEN as Action,QUANTITY as Qty,AMOUNT as Amt,NUM_ADDS as '# Adds',NUM_CHGS as '# Changes',NUM_DELS as '# Deletes',TOT_ADDED as 'Tot Adds',TOT_CHANGED as 'Tot Changed',TOT_DELETED as 'Tot Deleted',TOT_NET as 'Net Total' from V_BI_BOOKINGS where TRMNL = '{0}' and RPTID = '000072' order by CUST_NUMBER,REC_TYPE;",V.Caller.Terminal,V.Local.sSQL)
+
+F.Data.DataTable.CreateFromSQL("dtNewOrder","conts",V.Local.sSQL,True)
+
+F.Data.DataTable.SetValueFormat("dtNewOrder",-1,"ORDER_DATE","Date Ord","MM/DD/YY")
+
+F.Data.DataTable.RemoveColumn("dtNewOrder","ORDER_DATE")
+
+F.Data.Dictionary.CreateFromSQL("dictSP","conts","Select ID,RTRIM(NAME) from V_SALESPERSONS")
+F.Data.Dictionary.SetDefaultReturn("dictSP","")
+
+F.Data.DataTable.FillFromDictionary("dtNewOrder","dictSP","Salesperson")
+
+F.Data.Dictionary.CreateFromSQL("dictCust","conts","Select CUSTOMER,NAME_CUSTOMER from V_CUSTOMER_MASTER")
+F.Data.Dictionary.SetDefaultReturn("dictCust","")
+
+F.Data.DataTable.FillFromDictionary("dtNewOrder","dictCust","Customer ID","Customer Name")
+
+'Daily Sales
+F.Intrinsic.Control.If(V.DataTable.dtInvoiced.Exists)
+	F.Data.DataTable.Close("dtInvoiced")
+F.Intrinsic.Control.EndIf
+
+F.Intrinsic.String.Build("Select DATE_INVOICE,' ' as 'Invoice Date',LOCATION as 'Ship Facility',CUSTOMER as 'Customer ID',' ' as 'Customer Name',PART as 'Item',DESCRIPTION as 'Item Description',' ' as 'Customer Type',SALESPERSON as Salesperson,QTY_SHIPPED as 'Sales Qty',EXTENSION as 'Sales $',IF(COST = 0,0.00,(COST*QTY_SHIPPED)) as COGS from V_ORDER_HIST_LINE where DATE_INVOICE = '{0}' and ORDER_LINE <> '8000' and RTRIM(PART) <> 'COM';",V.Global.sOrdDate.PervasiveDate,V.Local.sSQL)
+
+F.Data.DataTable.CreateFromSQL("dtInvoiced","conts",V.Local.sSQL,True)
+
+F.Data.DataTable.SetValueFormat("dtInvoiced",-1,"DATE_INVOICE","Invoice Date","MM/DD/YY")
+
+F.Data.DataTable.RemoveColumn("dtInvoiced","DATE_INVOICE")
+
+F.Data.DataTable.FillFromDictionary("dtInvoiced","dictSP","Salesperson")
+F.Data.Dictionary.Close("dictSP")
+
+F.Data.DataTable.FillFromDictionary("dtInvoiced","dictCust","Customer ID","Customer Name")
+
+'Open Orders
+F.Intrinsic.Control.If(V.DataTable.dtOpen.Exists)
+	F.Data.DataTable.Close("dtOpen")
+F.Intrinsic.Control.EndIf
+
+F.Intrinsic.String.Build("Select ORDER_NO as 'Order Number',Left(RECORD_NO,3) as Line,LOCATION as Facility,CUSTOMER as 'Customer ID',' ' as 'Customer Name',PART as Item,DESCRIPTION as 'Item Description',' ' as 'Customer Type',' ' as 'Salesperson',EXTENSION as Price,IF(COST = 0,0.0,(COST*QTY_ORDERED)) as Cost,QTY_ORDERED as 'Ordered Quantity', QTY_SHIPPED as 'Shipped Quantity',DATE_ITEM_PROM,' ' as 'Order Due Date',DATE_ORDER,' ' as 'Created Date' from V_ORDER_LINES where RECORD_NO <> '8000' and RTRIM(PART) <> 'COM';","",V.Local.sSQL)
+
+F.Data.DataTable.CreateFromSQL("dtOpen","conts",V.Local.sSQL,True)
+
+F.Data.DataTable.SetValueFormat("dtOpen",-1,"DATE_ITEM_PROM","Order Due Date","MM/DD/YY")
+F.Data.DataTable.SetValueFormat("dtOpen",-1,"DATE_ORDER","Created Date","MM/DD/YY")
+
+F.Data.DataTable.RemoveColumn("dtOpen","DATE_ITEM_PROM")
+F.Data.DataTable.RemoveColumn("dtOpen","DATE_ORDER")
+
+F.Data.DataTable.FillFromDictionary("dtOpen","dictCust","Customer ID","Customer Name")
+F.Data.Dictionary.Close("dictCust")
+
+F.Data.Dictionary.CreateFromSQL("dictSP","conts","Select A.ORDER_NO,B.NAME from V_ORDER_HEADER A left join V_SALESPERSONS B on A.SALESPERSON = B.ID")
+F.Data.Dictionary.SetDefaultReturn("dictSP","")
+
+F.Data.DataTable.FillFromDictionary("dtOpen","dictSP","Order Number","Salesperson")
+F.Data.Dictionary.Close("dictSP")
+
+F.Intrinsic.Control.Catch
+	F.Intrinsic.Control.CallSub(Error,"SubRoutine",V.Ambient.CurrentSubroutine,"eNumber",V.Ambient.ErrorNumber,"eDescription",V.Ambient.ErrorDescription)
+F.Intrinsic.Control.EndTry
+Program.Sub.Data.End
+
+Program.Sub.OutputCSV.Start
+F.Intrinsic.Control.Try
+
+'New Orders
+F.Data.DataTable.SaveToCSV("dtNewOrder",V.Global.sNewOrdPath,True)
+
+'Daily Sales
+F.Data.DataTable.SaveToCSV("dtInvoiced",V.Global.sInvoicedPath,True)
+
+'Open Orders
+F.Data.DataTable.SaveToCSV("dtOpen",V.Global.sOpenPath,True)
+
+F.Intrinsic.Control.Catch
+	F.Intrinsic.Control.CallSub(Error,"SubRoutine",V.Ambient.CurrentSubroutine,"eNumber",V.Ambient.ErrorNumber,"eDescription",V.Ambient.ErrorDescription)
+F.Intrinsic.Control.EndTry
+Program.Sub.OutputCSV.End
+
+Program.Sub.SFTPUpload.Start
+F.Intrinsic.Control.Try
+V.Local.sRemoteHost.Declare
+V.Local.sRemoteUser.Declare
+V.Local.sRemotePwd.Declare
+V.Local.sRemotePort.Declare
+V.Local.sRemotePath.Declare
+V.Local.sDelFile.Declare
+V.Local.sTemp.Declare
+
+F.ODBC.Connection!conts.OpenCompanyConnection
+F.Data.Datatable.CreateFromSQL("dtSettings","conts","Select * from GCG_6279_SETTINGS where REC_ID = '1'")
+F.ODBC.Connection!conts.Close
+
+F.Intrinsic.Control.If(V.DataTable.dtSettings.RowCount,=,0)
+	F.Intrinsic.Control.ExitSub
+F.Intrinsic.Control.EndIf
+
+V.Local.sTemp.Set(V.DataTable.dtSettings(0).RemoteHost!FieldValTrim)
+F.Intrinsic.String.WeakDecryption(V.Local.sTemp,V.Local.sTemp)
+V.Local.sRemoteHost.Set(V.Local.sTemp)
+
+V.Local.sTemp.Set(V.DataTable.dtSettings(0).RemoteUser!FieldValTrim)
+F.Intrinsic.String.WeakDecryption(V.Local.sTemp,V.Local.sTemp)
+V.Local.sRemoteUser.Set(V.Local.sTemp)
+
+V.Local.sTemp.Set(V.DataTable.dtSettings(0).RemotePassword!FieldValTrim)
+F.Intrinsic.String.WeakDecryption(V.Local.sTemp,V.Local.sTemp)
+V.Local.sRemotePwd.Set(V.Local.sTemp)
+
+V.Local.sTemp.Set(V.DataTable.dtSettings(0).RemotePort!FieldValTrim)
+F.Intrinsic.String.WeakDecryption(V.Local.sTemp,V.Local.sTemp)
+V.Local.sRemotePort.Set(V.Local.sTemp)
+
+V.Local.sTemp.Set(V.DataTable.dtSettings(0).RemotePath!FieldValTrim)
+F.Intrinsic.String.WeakDecryption(V.Local.sTemp,V.Local.sTemp)
+V.Local.sRemotePath.Set(V.Local.sTemp)
+
+V.Local.sDelFile.Set(V.DataTable.dtSettings(0).DEL_FILE!FieldValTrim)
+
+'SFTP logon credentials.
+F.Communication.SFTP.SetProperty("SSHAcceptServerAuthentication","true")
+F.Communication.SFTP.SetProperty("remoteHost",V.Local.sRemoteHost.Trim)
+F.Communication.SFTP.SetProperty("User",V.Local.sRemoteUser.Trim)
+F.Communication.SFTP.SetProperty("Password",V.Local.sRemotePwd.Trim)
+F.Communication.SFTP.SetProperty("remotePort",V.Local.sRemotePort)
+F.Communication.SFTP.Logon
+'Daily Sales upload
+F.Communication.SFTP.SetProperty("RemotePath",V.Local.sRemotePath)
+F.Communication.SFTP.SetProperty("RemoteFile",V.Global.sInvoicedFile)
+F.Communication.SFTP.SetProperty("LocalFile",V.Global.sInvoicedPath)
+F.Communication.SFTP.SetProperty("transferMode",2)
+
+F.Communication.SFTP.Upload
+'Daily New Orders Upload
+F.Communication.SFTP.SetProperty("RemotePath",V.Local.sRemotePath)
+F.Communication.SFTP.SetProperty("RemoteFile",V.Global.sNewOrdFile)
+F.Communication.SFTP.SetProperty("LocalFile",V.Global.sNewOrdPath)
+F.Communication.SFTP.SetProperty("transferMode",2)
+
+F.Communication.SFTP.Upload
+'Daily Open Orders Upload
+F.Communication.SFTP.SetProperty("RemotePath",V.Local.sRemotePath)
+F.Communication.SFTP.SetProperty("RemoteFile",V.Global.sOpenFile)
+F.Communication.SFTP.SetProperty("LocalFile",V.Global.sOpenPath)
+F.Communication.SFTP.SetProperty("transferMode",2)
+
+F.Communication.SFTP.Upload
+
+F.Communication.SFTP.Logoff
+
+F.Intrinsic.Control.If(V.Local.sDelFile,=,"Y")
+	F.Intrinsic.File.DeleteFile(V.Global.sInvoicedPath)
+	F.Intrinsic.File.DeleteFile(V.Global.sNewOrdPath)
+	F.Intrinsic.File.DeleteFile(V.Global.sOpenPath)
+F.Intrinsic.Control.EndIf
+
+F.Intrinsic.Control.Catch
+	F.Intrinsic.Control.CallSub(Error,"SubRoutine",V.Ambient.CurrentSubroutine,"eNumber",V.Ambient.ErrorNumber,"eDescription",V.Ambient.ErrorDescription)
+F.Intrinsic.Control.EndTry
+Program.Sub.SFTPUpload.End
+
+Program.Sub.Error.Start
+V.Local.sError.Declare
+V.Local.iRet.Declare
+V.Local.sSep.Declare
+
+F.Intrinsic.String.Build("-------------------------------------------------------------------------------------",,V.Local.sSep)
+F.Intrinsic.String.Build("({5}-{6}){0}{7}{0}Project: {4}{0}{7}{0}Sub: {1}{0}Error: {2}, {3}", V.Ambient.NewLine, V.Args.SubRoutine, V.Args.eNumber, V.Args.eDescription,V.Caller.ScriptFile,V.Ambient.Date, V.Ambient.Time,V.Local.sSep,V.Local.sError)
+F.Intrinsic.UI.Msgbox(V.Local.sError,"Error",V.Local.iRet)
+Program.Sub.Error.End
+
+Program.Sub.Comments.Start
+${$5$}$2.0.0.0$}$2
+${$6$}$tsmith$}$20210503092651216$}$xqPbj9atw05FglvzeFsZ9cqXP+qvG6tX2aqwFVvATTjJO11nGK+LQI3fOVggl1sFK1zLKGZXT2s=
+Program.Sub.Comments.End
